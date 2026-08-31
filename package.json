@@ -1,6 +1,6 @@
 {
 	"name": "not-submodules",
-	"version": "1.0.1",
+	"version": "1.0.2",
 	"description": "Replace git submodules with plain nested git repos, ignored via .gitignore and tracked via folder-note frontmatter.",
 	"main": "main.js",
 	"scripts": {

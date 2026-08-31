@@ -11,11 +11,21 @@ export interface GitResult {
 }
 
 interface ExecFileError extends Error {
-	stderr?: string | Buffer;
+	stderr?: unknown;
 }
 
 function toExecFileError(e: unknown): ExecFileError {
 	return e instanceof Error ? (e as ExecFileError) : new Error(String(e));
+}
+
+/** Stringifies a Buffer/string/anything without referencing the Buffer type directly. */
+function stringifyMaybeBuffer(v: unknown): string {
+	if (typeof v === "string") return v;
+	if (v == null) return "";
+	if (typeof v === "object" && "toString" in v && typeof (v as { toString: unknown }).toString === "function") {
+		return String(v);
+	}
+	return "";
 }
 
 /** Run a git command with argv-style args (no shell involved, so no quoting issues). */
@@ -29,7 +39,7 @@ export async function runGit(args: string[], cwd: string, timeoutMs = 120000): P
 		return { stdout: stdout?.toString() ?? "", stderr: stderr?.toString() ?? "" };
 	} catch (e: unknown) {
 		const err = toExecFileError(e);
-		const stderrText = typeof err.stderr === "string" ? err.stderr : (err.stderr?.toString() ?? "");
+		const stderrText = stringifyMaybeBuffer(err.stderr);
 		const msg = (stderrText && stderrText.trim()) || err.message || String(e);
 		throw new Error(msg.trim());
 	}
