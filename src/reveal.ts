@@ -17,6 +17,6 @@ export function revealInFileExplorer(app: App, vaultPath: string): boolean {
 	if (typeof view.revealInFolder !== "function") return false;
 
 	view.revealInFolder(file);
-	app.workspace.revealLeaf(leaves[0]);
+	void app.workspace.revealLeaf(leaves[0]);
 	return true;
 }

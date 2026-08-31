@@ -7,6 +7,8 @@ import { App } from "obsidian";
  * Electron window when the Settings modal has been popped out into its own
  * window - `activeDocument`/`activeWindow` always resolve to whichever
  * window the input actually lives in, so this renders into those instead.
+ * (Timer scheduling still goes through the global `window`, per Obsidian's
+ * guidance that timer functions specifically should use `window`.)
  */
 export class SimplePathSuggest {
 	private containerEl: HTMLElement | null = null;
@@ -24,7 +26,7 @@ export class SimplePathSuggest {
 		this.inputEl.addEventListener("focus", () => this.onInput());
 		this.inputEl.addEventListener("blur", () => {
 			// Let a mousedown on a dropdown item register before we tear it down.
-			activeWindow.setTimeout(() => this.close(), 150);
+			window.setTimeout(() => this.close(), 150);
 		});
 		this.inputEl.addEventListener("keydown", (evt) => this.onKeyDown(evt));
 		activeWindow.addEventListener("resize", this.onResize);
@@ -45,20 +47,24 @@ export class SimplePathSuggest {
 	private render() {
 		this.close();
 		const container = activeDocument.body.createDiv({ cls: "not-submodules-suggest-container" });
-		container.style.position = "absolute";
-		container.style.zIndex = "99999";
-		container.style.background = "var(--background-primary)";
-		container.style.border = "1px solid var(--background-modifier-border)";
-		container.style.borderRadius = "4px";
-		container.style.boxShadow = "0 2px 8px rgba(0, 0, 0, 0.2)";
-		container.style.maxHeight = "220px";
-		container.style.overflowY = "auto";
+		container.setCssStyles({
+			position: "absolute",
+			zIndex: "99999",
+			background: "var(--background-primary)",
+			border: "1px solid var(--background-modifier-border)",
+			borderRadius: "4px",
+			boxShadow: "0 2px 8px rgba(0, 0, 0, 0.2)",
+			maxHeight: "220px",
+			overflowY: "auto",
+		});
 
 		this.items.forEach((item, i) => {
 			const itemEl = container.createDiv({ cls: "not-submodules-suggest-item", text: item });
-			itemEl.style.padding = "6px 10px";
-			itemEl.style.cursor = "pointer";
-			if (i === this.activeIndex) itemEl.style.background = "var(--background-modifier-hover)";
+			itemEl.setCssStyles({
+				padding: "6px 10px",
+				cursor: "pointer",
+				background: i === this.activeIndex ? "var(--background-modifier-hover)" : "",
+			});
 			itemEl.addEventListener("mouseenter", () => {
 				this.activeIndex = i;
 				this.highlight();
@@ -77,16 +83,20 @@ export class SimplePathSuggest {
 	private highlight() {
 		if (!this.containerEl) return;
 		Array.from(this.containerEl.children).forEach((el, i) => {
-			(el as HTMLElement).style.background = i === this.activeIndex ? "var(--background-modifier-hover)" : "";
+			(el as HTMLElement).setCssStyles({
+				background: i === this.activeIndex ? "var(--background-modifier-hover)" : "",
+			});
 		});
 	}
 
 	private reposition() {
 		if (!this.containerEl) return;
 		const rect = this.inputEl.getBoundingClientRect();
-		this.containerEl.style.left = `${rect.left + activeWindow.scrollX}px`;
-		this.containerEl.style.top = `${rect.bottom + activeWindow.scrollY + 2}px`;
-		this.containerEl.style.width = `${rect.width}px`;
+		this.containerEl.setCssStyles({
+			left: `${rect.left + activeWindow.scrollX}px`,
+			top: `${rect.bottom + activeWindow.scrollY + 2}px`,
+			width: `${rect.width}px`,
+		});
 	}
 
 	private onKeyDown(evt: KeyboardEvent) {

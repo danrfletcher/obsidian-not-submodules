@@ -10,6 +10,14 @@ export interface GitResult {
 	stderr: string;
 }
 
+interface ExecFileError extends Error {
+	stderr?: string | Buffer;
+}
+
+function toExecFileError(e: unknown): ExecFileError {
+	return e instanceof Error ? (e as ExecFileError) : new Error(String(e));
+}
+
 /** Run a git command with argv-style args (no shell involved, so no quoting issues). */
 export async function runGit(args: string[], cwd: string, timeoutMs = 120000): Promise<GitResult> {
 	try {
@@ -19,9 +27,10 @@ export async function runGit(args: string[], cwd: string, timeoutMs = 120000): P
 			timeout: timeoutMs,
 		});
 		return { stdout: stdout?.toString() ?? "", stderr: stderr?.toString() ?? "" };
-	} catch (e: any) {
-		const stderr: string = e?.stderr?.toString?.() ?? "";
-		const msg = (stderr && stderr.trim()) || e?.message || String(e);
+	} catch (e: unknown) {
+		const err = toExecFileError(e);
+		const stderrText = typeof err.stderr === "string" ? err.stderr : (err.stderr?.toString() ?? "");
+		const msg = (stderrText && stderrText.trim()) || err.message || String(e);
 		throw new Error(msg.trim());
 	}
 }
@@ -64,7 +73,7 @@ export function hasGitDir(absPath: string): boolean {
 
 export function repoNameFromUrl(url: string): string {
 	const cleaned = url.trim().replace(/\/+$/, "").replace(/\.git$/i, "");
-	const parts = cleaned.split(/[\/:]/).filter(Boolean);
+	const parts = cleaned.split(/[/:]/).filter(Boolean);
 	return parts[parts.length - 1] || "repo";
 }
 

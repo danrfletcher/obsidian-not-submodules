@@ -115,7 +115,8 @@ export async function registerRepoAtPath(app: App, relFolderPath: string): Promi
 
 	if (existingNote instanceof TFile) {
 		const fm = app.metadataCache.getFileCache(existingNote)?.frontmatter;
-		const repos: string[] = Array.isArray(fm?.git_repos) ? fm!.git_repos.map(sanitizeGitUrl) : [];
+		const rawRepos = fm?.git_repos;
+		const repos: string[] = Array.isArray(rawRepos) ? rawRepos.map(sanitizeGitUrl) : [];
 		if (repos.includes(url)) {
 			return { status: "already-registered", message: `${url} is already registered in ${notePath}.` };
 		}

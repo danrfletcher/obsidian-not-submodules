@@ -1,7 +1,8 @@
-import { App, TFile, TFolder, normalizePath } from "obsidian";
+import { App, TFile, TFolder, normalizePath, FileSystemAdapter } from "obsidian";
+import * as fs from "fs";
+import * as path from "path";
 import { GIT_REPO_SUFFIX, RepoEntry } from "./types";
 import { gitRemoteUrl, hasGitDir, repoNameFromUrl, sanitizeGitUrl } from "./gitUtils";
-import { FileSystemAdapter } from "obsidian";
 
 /**
  * A "folder note" is a markdown file that lives directly inside the folder
@@ -20,10 +21,14 @@ function joinVaultPath(parent: string, child: string): string {
 }
 
 /** Skip folder notes living inside a "staged for deletion" convention folder (e.g. this
- * vault's `_to_delete/`), so leftover content there never reappears in the registry. */
-const IGNORED_PATH_SEGMENTS = new Set(["_to_delete", ".trash", ".obsidian", ".git", ".space"]);
-function isUnderIgnoredFolder(vaultPath: string): boolean {
-	return vaultPath.split("/").some((seg) => IGNORED_PATH_SEGMENTS.has(seg));
+ * vault's `_to_delete/`) or Obsidian's own config folder, so leftover content there
+ * never reappears in the registry. */
+function ignoredPathSegments(app: App): Set<string> {
+	return new Set(["_to_delete", ".trash", app.vault.configDir, ".git", ".space"]);
+}
+function isUnderIgnoredFolder(app: App, vaultPath: string): boolean {
+	const ignored = ignoredPathSegments(app);
+	return vaultPath.split("/").some((seg) => ignored.has(seg));
 }
 
 /** Scan the whole vault for folder notes declaring `git_repos` frontmatter and build the registry. */
@@ -34,13 +39,13 @@ export function buildRegistry(app: App): RepoEntry[] {
 
 	for (const file of app.vault.getMarkdownFiles()) {
 		if (!isFolderNote(file)) continue;
-		if (isUnderIgnoredFolder(file.path)) continue;
+		if (isUnderIgnoredFolder(app, file.path)) continue;
 
 		const fm = app.metadataCache.getFileCache(file)?.frontmatter;
 		const repos = fm?.git_repos;
 		if (!Array.isArray(repos)) continue;
 
-		const parentFolderPath = file.parent!.isRoot() ? "" : file.parent!.path;
+		const parentFolderPath = file.parent && !file.parent.isRoot() ? file.parent.path : "";
 
 		for (const raw of repos) {
 			const url = sanitizeGitUrl(raw);
@@ -73,7 +78,9 @@ export function buildRegistry(app: App): RepoEntry[] {
 	return entries;
 }
 
-const FS_SKIP_DIRS = new Set([".git", ".obsidian", "node_modules", ".trash", ".space", ".DS_Store", "_to_delete"]);
+function fsSkipDirs(app: App): Set<string> {
+	return new Set([".git", app.vault.configDir, "node_modules", ".trash", ".space", ".DS_Store", "_to_delete"]);
+}
 
 /**
  * All folders anywhere under the vault root whose name ends with -git-repo,
@@ -86,12 +93,11 @@ const FS_SKIP_DIRS = new Set([".git", ".obsidian", "node_modules", ".trash", ".s
 export function findAllGitRepoFolders(app: App): string[] {
 	const basePath = getBasePath(app);
 	if (!basePath) return [];
-	const fs = require("fs");
-	const path = require("path");
+	const skipDirs = fsSkipDirs(app);
 	const results: string[] = [];
 
 	const walk = (absDir: string, relDir: string) => {
-		let entries: any[];
+		let entries: fs.Dirent[];
 		try {
 			entries = fs.readdirSync(absDir, { withFileTypes: true });
 		} catch {
@@ -99,7 +105,7 @@ export function findAllGitRepoFolders(app: App): string[] {
 		}
 		for (const entry of entries) {
 			if (!entry.isDirectory()) continue;
-			if (FS_SKIP_DIRS.has(entry.name)) continue;
+			if (skipDirs.has(entry.name)) continue;
 			const rel = relDir ? `${relDir}/${entry.name}` : entry.name;
 			if (entry.name.endsWith(GIT_REPO_SUFFIX)) {
 				results.push(rel);

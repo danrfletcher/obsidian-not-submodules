@@ -1,6 +1,7 @@
 import { Notice, Plugin, TFile } from "obsidian";
 import { NotSubmodulesSettingTab } from "./settingsTab";
 import { findEnclosingGitRepoFolder, registerRepoAtPath } from "./registerRepo";
+import { errorMessage } from "./errors";
 
 export default class NotSubmodulesPlugin extends Plugin {
 	async onload() {
@@ -15,7 +16,7 @@ export default class NotSubmodulesPlugin extends Plugin {
 				const repoFolder = findEnclosingGitRepoFolder(file);
 				if (!repoFolder) return false;
 				if (!checking) {
-					this.registerFromFile(file);
+					void this.registerFromFile(file);
 				}
 				return true;
 			},
@@ -27,7 +28,7 @@ export default class NotSubmodulesPlugin extends Plugin {
 				new Notice("Open a file inside a -git-repo folder first.");
 				return;
 			}
-			this.registerFromFile(file);
+			void this.registerFromFile(file);
 		});
 	}
 
@@ -40,8 +41,8 @@ export default class NotSubmodulesPlugin extends Plugin {
 		try {
 			const outcome = await registerRepoAtPath(this.app, repoFolder.path);
 			new Notice(outcome.message);
-		} catch (e: any) {
-			new Notice(`Couldn't register: ${e?.message ?? e}`);
+		} catch (e: unknown) {
+			new Notice(`Couldn't register: ${errorMessage(e)}`);
 		}
 	}
 }

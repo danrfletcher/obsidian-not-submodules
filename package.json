@@ -1,6 +1,6 @@
 {
 	"name": "not-submodules",
-	"version": "1.0.0",
+	"version": "1.0.1",
 	"description": "Replace git submodules with plain nested git repos, ignored via .gitignore and tracked via folder-note frontmatter.",
 	"main": "main.js",
 	"scripts": {
@@ -12,7 +12,6 @@
 	"license": "MIT",
 	"devDependencies": {
 		"@types/node": "^16.11.6",
-		"builtin-modules": "3.3.0",
 		"esbuild": "0.21.5",
 		"obsidian": "latest",
 		"tslib": "2.4.0",

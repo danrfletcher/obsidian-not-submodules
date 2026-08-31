@@ -1,4 +1,4 @@
-import { App, Notice, PluginSettingTab, Setting, TFolder, normalizePath, setIcon } from "obsidian";
+import { App, Notice, PluginSettingTab, Setting, normalizePath, setIcon } from "obsidian";
 import type NotSubmodulesPlugin from "./main";
 import { GITIGNORE_LINE } from "./types";
 import { gitClone, gitInit, gitPull, gitPush, hasGitDir } from "./gitUtils";
@@ -11,6 +11,7 @@ import {
 import { registerRepoAtPath } from "./registerRepo";
 import { revealInFileExplorer } from "./reveal";
 import { SimplePathSuggest } from "./pathSuggest";
+import { errorMessage } from "./errors";
 import * as fs from "fs";
 import * as path from "path";
 
@@ -59,8 +60,8 @@ export class NotSubmodulesSettingTab extends PluginSettingTab {
 							await gitInit(basePath);
 							new Notice("Initialised the vault as a git repository.");
 							this.display();
-						} catch (e: any) {
-							new Notice(`Failed to initialise: ${e?.message ?? e}`);
+						} catch (e: unknown) {
+							new Notice(`Failed to initialise: ${errorMessage(e)}`);
 							btn.setDisabled(false).setButtonText("Initialise");
 						}
 					})
@@ -100,8 +101,8 @@ export class NotSubmodulesSettingTab extends PluginSettingTab {
 							fs.writeFileSync(gitignorePath, `${existing}${sep}${GITIGNORE_LINE}\n`);
 							new Notice(".gitignore updated.");
 							this.display();
-						} catch (e: any) {
-							new Notice(`Failed to update .gitignore: ${e?.message ?? e}`);
+						} catch (e: unknown) {
+							new Notice(`Failed to update .gitignore: ${errorMessage(e)}`);
 						}
 					})
 			);
@@ -109,7 +110,7 @@ export class NotSubmodulesSettingTab extends PluginSettingTab {
 	}
 
 	private renderRepoList(containerEl: HTMLElement): void {
-		containerEl.createEl("h3", { text: "Nested git repos" });
+		new Setting(containerEl).setName("Nested git repos").setHeading();
 
 		const registry = buildRegistry(this.app);
 		const basePath = getBasePath(this.app);
@@ -134,8 +135,8 @@ export class NotSubmodulesSettingTab extends PluginSettingTab {
 						if (!basePath) continue;
 						try {
 							await gitClone(entry.url, `${basePath}/${entry.localFolderPath}`);
-						} catch (e: any) {
-							new Notice(`Failed to clone ${entry.repoName}: ${e?.message ?? e}`);
+						} catch (e: unknown) {
+							new Notice(`Failed to clone ${entry.repoName}: ${errorMessage(e)}`);
 						}
 					}
 					new Notice("Finished cloning missing repos.");
@@ -151,8 +152,8 @@ export class NotSubmodulesSettingTab extends PluginSettingTab {
 						if (!basePath) continue;
 						try {
 							await gitPull(`${basePath}/${entry.localFolderPath}`);
-						} catch (e: any) {
-							new Notice(`Failed to pull ${entry.repoName}: ${e?.message ?? e}`);
+						} catch (e: unknown) {
+							new Notice(`Failed to pull ${entry.repoName}: ${errorMessage(e)}`);
 						}
 					}
 					new Notice("Finished pulling all repos.");
@@ -166,8 +167,8 @@ export class NotSubmodulesSettingTab extends PluginSettingTab {
 						if (!basePath) continue;
 						try {
 							await gitPush(`${basePath}/${entry.localFolderPath}`);
-						} catch (e: any) {
-							new Notice(`Failed to push ${entry.repoName}: ${e?.message ?? e}`);
+						} catch (e: unknown) {
+							new Notice(`Failed to push ${entry.repoName}: ${errorMessage(e)}`);
 						}
 					}
 					new Notice("Finished pushing all repos.");
@@ -188,7 +189,7 @@ export class NotSubmodulesSettingTab extends PluginSettingTab {
 					? "Click to reveal in file navigator"
 					: "Not cloned locally yet - click to reveal its parent folder"
 			);
-			setting.nameEl.style.cursor = "pointer";
+			setting.nameEl.setCssStyles({ cursor: "pointer" });
 			setting.nameEl.addEventListener("click", () => {
 				const revealed = entry.isCloned
 					? revealInFileExplorer(this.app, entry.localFolderPath)
@@ -206,8 +207,8 @@ export class NotSubmodulesSettingTab extends PluginSettingTab {
 						try {
 							await gitPull(`${basePath}/${entry.localFolderPath}`);
 							new Notice(`Pulled ${entry.repoName}.`);
-						} catch (e: any) {
-							new Notice(`Pull failed: ${e?.message ?? e}`);
+						} catch (e: unknown) {
+							new Notice(`Pull failed: ${errorMessage(e)}`);
 						} finally {
 							this.display();
 						}
@@ -220,8 +221,8 @@ export class NotSubmodulesSettingTab extends PluginSettingTab {
 						try {
 							await gitPush(`${basePath}/${entry.localFolderPath}`);
 							new Notice(`Pushed ${entry.repoName}.`);
-						} catch (e: any) {
-							new Notice(`Push failed: ${e?.message ?? e}`);
+						} catch (e: unknown) {
+							new Notice(`Push failed: ${errorMessage(e)}`);
 						} finally {
 							this.display();
 						}
@@ -238,8 +239,8 @@ export class NotSubmodulesSettingTab extends PluginSettingTab {
 							try {
 								await gitClone(entry.url, `${basePath}/${entry.localFolderPath}`);
 								new Notice(`Cloned ${entry.repoName}.`);
-							} catch (e: any) {
-								new Notice(`Clone failed: ${e?.message ?? e}`);
+							} catch (e: unknown) {
+								new Notice(`Clone failed: ${errorMessage(e)}`);
 							} finally {
 								this.display();
 							}
@@ -250,7 +251,7 @@ export class NotSubmodulesSettingTab extends PluginSettingTab {
 	}
 
 	private renderRegisterNew(containerEl: HTMLElement): void {
-		containerEl.createEl("h3", { text: "Register a repo" });
+		new Setting(containerEl).setName("Register a repo").setHeading();
 		containerEl.createEl("p", {
 			cls: "setting-item-description",
 			text:
@@ -259,9 +260,13 @@ export class NotSubmodulesSettingTab extends PluginSettingTab {
 		});
 
 		let candidates = findUnregisteredGitRepoFoldersFast(this.app);
-		findUnregisteredGitRepoFolders(this.app).then((accurate) => {
-			candidates = accurate;
-		});
+		findUnregisteredGitRepoFolders(this.app)
+			.then((accurate) => {
+				candidates = accurate;
+			})
+			.catch(() => {
+				// Ignore - the fast/synchronous candidate list above still works.
+			});
 
 		let chosenPath = "";
 
@@ -295,8 +300,8 @@ export class NotSubmodulesSettingTab extends PluginSettingTab {
 						const outcome = await registerRepoAtPath(this.app, relPath);
 						new Notice(outcome.message);
 						this.display();
-					} catch (e: any) {
-						new Notice(`Couldn't register: ${e?.message ?? e}`);
+					} catch (e: unknown) {
+						new Notice(`Couldn't register: ${errorMessage(e)}`);
 						btn.setDisabled(false).setButtonText("Register");
 					}
 				})
