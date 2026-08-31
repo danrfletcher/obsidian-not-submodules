@@ -1,0 +1,4 @@
+.not-submodules-repo-name:hover {
+	text-decoration: underline;
+	color: var(--text-accent);
+}
