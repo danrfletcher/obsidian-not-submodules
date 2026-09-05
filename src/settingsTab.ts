@@ -1,4 +1,5 @@
 import { App, Notice, PluginSettingTab, Setting, normalizePath, setIcon } from "obsidian";
+import type { TAbstractFile } from "obsidian";
 import type NotSubmodulesPlugin from "./main";
 import { GITIGNORE_LINE } from "./types";
 import { gitClone, gitInit, gitPull, gitPush, hasGitDir } from "./gitUtils";
@@ -17,10 +18,12 @@ import * as path from "path";
 
 export class NotSubmodulesSettingTab extends PluginSettingTab {
 	plugin: NotSubmodulesPlugin;
+	private refreshTimer: number | null = null;
 
 	constructor(app: App, plugin: NotSubmodulesPlugin) {
 		super(app, plugin);
 		this.plugin = plugin;
+		this.registerAutoRefresh();
 	}
 
 	display(): void {
@@ -31,6 +34,32 @@ export class NotSubmodulesSettingTab extends PluginSettingTab {
 		this.renderGitignoreSetting(containerEl);
 		this.renderRepoList(containerEl);
 		this.renderRegisterNew(containerEl);
+	}
+
+	/**
+	 * Keeps the repo list (and the "Register a repo" candidate list) in sync
+	 * with changes that happen outside this tab's own buttons - registering
+	 * via the command palette/ribbon icon while Settings is open, or
+	 * hand-editing a folder note's `git_repos` frontmatter (adding, removing,
+	 * deleting, or renaming it) - without requiring a reload of Obsidian.
+	 *
+	 * Registered once (tied to the plugin's lifetime via `registerEvent`, so
+	 * it's cleaned up automatically on unload) rather than from `display()`,
+	 * which is called repeatedly and would otherwise leak listeners.
+	 */
+	private registerAutoRefresh(): void {
+		const scheduleRefresh = (_file: TAbstractFile) => {
+			if (this.refreshTimer !== null) window.clearTimeout(this.refreshTimer);
+			this.refreshTimer = window.setTimeout(() => {
+				this.refreshTimer = null;
+				if (this.containerEl.isShown()) this.display();
+			}, 200);
+		};
+		this.plugin.registerEvent(this.app.metadataCache.on("changed", scheduleRefresh));
+		this.plugin.registerEvent(this.app.metadataCache.on("deleted", scheduleRefresh));
+		this.plugin.registerEvent(this.app.vault.on("create", scheduleRefresh));
+		this.plugin.registerEvent(this.app.vault.on("delete", scheduleRefresh));
+		this.plugin.registerEvent(this.app.vault.on("rename", scheduleRefresh));
 	}
 
 	private renderGitInitSetting(containerEl: HTMLElement): void {
