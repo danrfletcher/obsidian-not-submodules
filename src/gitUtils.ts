@@ -49,9 +49,10 @@ export async function gitInit(cwd: string): Promise<GitResult> {
 	return runGit(["init"], cwd);
 }
 
-/** Clones `url` into `targetAbsPath` (which must not already exist). */
+/** Clones `url` into `targetAbsPath` (which must not already exist). Creates any missing parent folders first. */
 export async function gitClone(url: string, targetAbsPath: string): Promise<GitResult> {
 	const parent = path.dirname(targetAbsPath);
+	fs.mkdirSync(parent, { recursive: true });
 	return runGit(["clone", "--", url, targetAbsPath], parent);
 }
 
@@ -61,6 +62,123 @@ export async function gitPull(cwd: string): Promise<GitResult> {
 
 export async function gitPush(cwd: string): Promise<GitResult> {
 	return runGit(["push"], cwd);
+}
+
+/** Whether `cwd`'s working tree has any uncommitted changes (tracked or untracked). */
+export async function gitIsDirty(cwd: string): Promise<boolean> {
+	const { stdout } = await runGit(["status", "--porcelain"], cwd);
+	return stdout.trim().length > 0;
+}
+
+export async function gitCurrentBranch(cwd: string): Promise<string | null> {
+	try {
+		const { stdout } = await runGit(["rev-parse", "--abbrev-ref", "HEAD"], cwd);
+		const branch = stdout.trim();
+		return branch && branch !== "HEAD" ? branch : null;
+	} catch {
+		return null;
+	}
+}
+
+export interface BranchList {
+	local: string[];
+	remote: string[];
+}
+
+/** Local branch names, and remote branch names (as `<remote>/<branch>`) that have no matching local branch. */
+export async function gitListBranches(cwd: string): Promise<BranchList> {
+	const [localOut, remoteOut] = await Promise.all([
+		runGit(["branch", "--format=%(refname:short)"], cwd),
+		runGit(["branch", "-r", "--format=%(refname:short)"], cwd),
+	]);
+	const local = localOut.stdout.split("\n").map((s) => s.trim()).filter(Boolean);
+	const localSet = new Set(local);
+	const remote = remoteOut.stdout
+		.split("\n")
+		.map((s) => s.trim())
+		.filter(Boolean)
+		// A remote's HEAD symref shows up in --format=%(refname:short) as just
+		// the bare remote name (e.g. "origin", not "origin/HEAD") - filter out
+		// anything with no "<remote>/<branch>" shape, not just a literal "/HEAD" suffix.
+		.filter((r) => r.includes("/"))
+		.filter((r) => !r.endsWith("/HEAD"))
+		.filter((r) => !localSet.has(r.slice(r.indexOf("/") + 1)));
+	return { local, remote };
+}
+
+/** Switches to an already-local branch immediately. */
+export async function gitCheckoutLocalBranch(cwd: string, branch: string): Promise<GitResult> {
+	return runGit(["checkout", branch], cwd);
+}
+
+/** Fetches and switches to a remote-only branch (e.g. "origin/feature"), creating a local tracking branch. */
+export async function gitCheckoutRemoteBranch(cwd: string, remoteRef: string): Promise<GitResult> {
+	const slashIdx = remoteRef.indexOf("/");
+	if (slashIdx === -1) throw new Error(`Not a remote branch reference: "${remoteRef}".`);
+	const remote = remoteRef.slice(0, slashIdx);
+	const branch = remoteRef.slice(slashIdx + 1);
+	await runGit(["fetch", remote, branch], cwd);
+	return runGit(["checkout", "-B", branch, "--track", remoteRef], cwd);
+}
+
+export interface StashStatus {
+	hasStash: boolean;
+	/** The branch the top stash entry was created from, if determinable. */
+	branch: string | null;
+}
+
+/** Whether a stash is outstanding, and which branch it was made from ("WIP on <branch>: ..." / "On <branch>: ..."). */
+export async function gitStashStatus(cwd: string): Promise<StashStatus> {
+	const { stdout } = await runGit(["stash", "list"], cwd);
+	const firstLine = stdout.split("\n").find((l) => l.trim().length > 0);
+	if (!firstLine) return { hasStash: false, branch: null };
+	const match = firstLine.match(/(?:WIP on|On) ([^:]+):/);
+	return { hasStash: true, branch: match ? match[1].trim() : null };
+}
+
+/** Stashes both tracked and untracked changes - a "dirty working tree" means either, and the user expects both stashed. */
+export async function gitStashPush(cwd: string): Promise<GitResult> {
+	return runGit(["stash", "push", "--include-untracked"], cwd);
+}
+
+export async function gitStashPop(cwd: string): Promise<GitResult> {
+	return runGit(["stash", "pop"], cwd);
+}
+
+/** Removes a worktree via git (not a raw folder delete), so the main repo's worktree bookkeeping doesn't go stale. */
+export async function gitWorktreeRemove(mainRepoCwd: string, worktreeAbsPath: string): Promise<GitResult> {
+	return runGit(["worktree", "remove", "--force", worktreeAbsPath], mainRepoCwd);
+}
+
+/** Re-points a worktree's bookkeeping after its folder was moved outside `git worktree move`. */
+export async function gitWorktreeRepair(mainRepoCwd: string, worktreeAbsPath: string): Promise<GitResult> {
+	return runGit(["worktree", "repair", worktreeAbsPath], mainRepoCwd);
+}
+
+export interface WorktreeInfo {
+	path: string;
+	branch: string | null;
+	/** True when git's own bookkeeping can no longer find this worktree's folder (a stale pointer). */
+	broken: boolean;
+}
+
+/** Lists every worktree git knows about for the repo at `mainRepoCwd`, including whether each is broken. */
+export async function gitWorktreeList(mainRepoCwd: string): Promise<WorktreeInfo[]> {
+	const { stdout } = await runGit(["worktree", "list", "--porcelain"], mainRepoCwd);
+	const entries: WorktreeInfo[] = [];
+	let current: Partial<WorktreeInfo> | null = null;
+	for (const line of stdout.split("\n")) {
+		if (line.startsWith("worktree ")) {
+			if (current?.path) entries.push({ path: current.path, branch: current.branch ?? null, broken: !!current.broken });
+			current = { path: line.slice("worktree ".length).trim(), branch: null, broken: false };
+		} else if (line.startsWith("branch ")) {
+			if (current) current.branch = line.slice("branch ".length).trim().replace(/^refs\/heads\//, "");
+		} else if (line.startsWith("prunable")) {
+			if (current) current.broken = true;
+		}
+	}
+	if (current?.path) entries.push({ path: current.path, branch: current.branch ?? null, broken: !!current.broken });
+	return entries;
 }
 
 export async function gitRemoteUrl(cwd: string): Promise<string | null> {
