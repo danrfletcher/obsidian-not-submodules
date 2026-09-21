@@ -16,6 +16,13 @@ import { errorMessage } from "./errors";
 import * as fs from "fs";
 import * as path from "path";
 
+/** Vault-relative parent path of a vault-relative path ("" for the vault root). */
+function vaultDirname(vaultPath: string): string {
+	const parts = vaultPath.split("/").filter(Boolean);
+	parts.pop();
+	return parts.join("/");
+}
+
 export class NotSubmodulesSettingTab extends PluginSettingTab {
 	plugin: NotSubmodulesPlugin;
 	private refreshTimer: number | null = null;
@@ -138,13 +145,19 @@ export class NotSubmodulesSettingTab extends PluginSettingTab {
 		}
 	}
 
+	/**
+	 * PR-1 keeps rendering one row per entry off its first (only, for now)
+	 * location - the new model's locations array and multi-location UI
+	 * (Originals/Worktrees sections, per-location actions) land in PR-4.
+	 */
 	private renderRepoList(containerEl: HTMLElement): void {
 		new Setting(containerEl).setName("Nested git repos").setHeading();
 
 		const registry = buildRegistry(this.app);
 		const basePath = getBasePath(this.app);
-		const missing = registry.filter((r) => !r.isCloned);
-		const cloned = registry.filter((r) => r.isCloned);
+		const withLocation = registry.filter((r) => r.locations.length > 0);
+		const missing = withLocation.filter((r) => !r.locations[0].isCloned);
+		const cloned = withLocation.filter((r) => r.locations[0].isCloned);
 
 		if (registry.length === 0) {
 			containerEl.createEl("p", {
@@ -163,7 +176,7 @@ export class NotSubmodulesSettingTab extends PluginSettingTab {
 					for (const entry of missing) {
 						if (!basePath) continue;
 						try {
-							await gitClone(entry.url, `${basePath}/${entry.localFolderPath}`);
+							await gitClone(entry.originUrl, `${basePath}/${entry.locations[0].vaultPath}`);
 						} catch (e: unknown) {
 							new Notice(`Failed to clone ${entry.repoName}: ${errorMessage(e)}`);
 						}
@@ -180,7 +193,7 @@ export class NotSubmodulesSettingTab extends PluginSettingTab {
 					for (const entry of cloned) {
 						if (!basePath) continue;
 						try {
-							await gitPull(`${basePath}/${entry.localFolderPath}`);
+							await gitPull(`${basePath}/${entry.locations[0].vaultPath}`);
 						} catch (e: unknown) {
 							new Notice(`Failed to pull ${entry.repoName}: ${errorMessage(e)}`);
 						}
@@ -195,7 +208,7 @@ export class NotSubmodulesSettingTab extends PluginSettingTab {
 					for (const entry of cloned) {
 						if (!basePath) continue;
 						try {
-							await gitPush(`${basePath}/${entry.localFolderPath}`);
+							await gitPush(`${basePath}/${entry.locations[0].vaultPath}`);
 						} catch (e: unknown) {
 							new Notice(`Failed to push ${entry.repoName}: ${errorMessage(e)}`);
 						}
@@ -206,35 +219,38 @@ export class NotSubmodulesSettingTab extends PluginSettingTab {
 			);
 		}
 
-		for (const entry of registry) {
+		for (const entry of withLocation) {
+			const location = entry.locations[0];
+			const parentFolderPath = vaultDirname(location.vaultPath);
+
 			const setting = new Setting(containerEl)
 				.setName(entry.repoName)
-				.setDesc(`${entry.url} \u00b7 in ${entry.parentFolderPath || "vault root"}`);
+				.setDesc(`${entry.originUrl} \u00b7 in ${parentFolderPath || "vault root"}`);
 
 			setting.nameEl.addClass("not-submodules-repo-name");
 			setting.nameEl.setAttr(
 				"title",
-				entry.isCloned
+				location.isCloned
 					? "Click to reveal in file navigator"
 					: "Not cloned locally yet - click to reveal its parent folder"
 			);
 			setting.nameEl.setCssStyles({ cursor: "pointer" });
 			setting.nameEl.addEventListener("click", () => {
-				const revealed = entry.isCloned
-					? revealInFileExplorer(this.app, entry.localFolderPath)
-					: revealInFileExplorer(this.app, entry.parentFolderPath);
+				const revealed = location.isCloned
+					? revealInFileExplorer(this.app, location.vaultPath)
+					: revealInFileExplorer(this.app, parentFolderPath);
 				if (!revealed) {
 					new Notice("Couldn't reveal it in the file navigator.");
 				}
 			});
 
-			if (entry.isCloned) {
+			if (location.isCloned) {
 				setting.addButton((btn) =>
 					btn.setButtonText("Pull").onClick(async () => {
 						btn.setDisabled(true).setButtonText("Pulling...");
 						if (!basePath) return;
 						try {
-							await gitPull(`${basePath}/${entry.localFolderPath}`);
+							await gitPull(`${basePath}/${location.vaultPath}`);
 							new Notice(`Pulled ${entry.repoName}.`);
 						} catch (e: unknown) {
 							new Notice(`Pull failed: ${errorMessage(e)}`);
@@ -248,7 +264,7 @@ export class NotSubmodulesSettingTab extends PluginSettingTab {
 						btn.setDisabled(true).setButtonText("Pushing...");
 						if (!basePath) return;
 						try {
-							await gitPush(`${basePath}/${entry.localFolderPath}`);
+							await gitPush(`${basePath}/${location.vaultPath}`);
 							new Notice(`Pushed ${entry.repoName}.`);
 						} catch (e: unknown) {
 							new Notice(`Push failed: ${errorMessage(e)}`);
@@ -266,7 +282,7 @@ export class NotSubmodulesSettingTab extends PluginSettingTab {
 							btn.setDisabled(true).setButtonText("Cloning...");
 							if (!basePath) return;
 							try {
-								await gitClone(entry.url, `${basePath}/${entry.localFolderPath}`);
+								await gitClone(entry.originUrl, `${basePath}/${location.vaultPath}`);
 								new Notice(`Cloned ${entry.repoName}.`);
 							} catch (e: unknown) {
 								new Notice(`Clone failed: ${errorMessage(e)}`);

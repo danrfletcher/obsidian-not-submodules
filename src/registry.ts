@@ -1,8 +1,8 @@
 import { App, TFile, TFolder, normalizePath, FileSystemAdapter } from "obsidian";
 import * as fs from "fs";
 import * as path from "path";
-import { GIT_REPO_SUFFIX, RepoEntry } from "./types";
-import { gitRemoteUrl, hasGitDir, repoNameFromUrl, sanitizeGitUrl } from "./gitUtils";
+import { GIT_REPO_SUFFIX, RepoEntry, RepoLocation } from "./types";
+import { gitRemoteUrl, hasGitDir, normalizeOriginUrl, repoNameFromUrl, sanitizeGitUrl } from "./gitUtils";
 
 /**
  * A "folder note" is a markdown file that lives directly inside the folder
@@ -62,14 +62,20 @@ export function buildRegistry(app: App): RepoEntry[] {
 			const folderExists = app.vault.getAbstractFileByPath(localFolderPath) instanceof TFolder;
 			const isCloned = folderExists && hasGitDir(absPath);
 
-			entries.push({
-				url,
-				repoName,
-				folderName,
-				parentFolderPath,
-				localFolderPath,
-				folderNotePath: file.path,
+			const location: RepoLocation = {
+				vaultPath: localFolderPath,
+				kind: "original",
+				continuityKey: localFolderPath,
 				isCloned,
+				isDirty: false,
+				hasStash: false,
+			};
+
+			entries.push({
+				normalizedOrigin: normalizeOriginUrl(url),
+				originUrl: url,
+				repoName,
+				locations: [location],
 			});
 		}
 	}
@@ -129,7 +135,7 @@ export function findAllGitRepoFolders(app: App): string[] {
  */
 export async function findUnregisteredGitRepoFolders(app: App): Promise<string[]> {
 	const registry = buildRegistry(app);
-	const registeredUrls = new Set(registry.map((r) => r.url));
+	const registeredUrls = new Set(registry.map((r) => r.originUrl));
 	const basePath = getBasePath(app);
 	const candidates = findAllGitRepoFolders(app);
 	if (!basePath) return candidates;
@@ -151,7 +157,7 @@ export async function findUnregisteredGitRepoFolders(app: App): Promise<string[]
 /** Fast, synchronous approximation of findUnregisteredGitRepoFolders (path-based, no git calls). */
 export function findUnregisteredGitRepoFoldersFast(app: App): string[] {
 	const registry = buildRegistry(app);
-	const registered = new Set(registry.map((r) => r.localFolderPath));
+	const registered = new Set(registry.flatMap((r) => r.locations.map((l) => l.vaultPath)));
 	return findAllGitRepoFolders(app).filter((p) => !registered.has(p));
 }
 
