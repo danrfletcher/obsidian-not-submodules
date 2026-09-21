@@ -1,6 +1,6 @@
 import * as fs from "fs";
 import * as path from "path";
-import { LocationKind, RepoEntry, RepoLocation } from "./types";
+import { LocationKind, RepoEntry, RepoLocation, SubmoduleEntry } from "./types";
 import { gitRemoteUrl, normalizeOriginUrl } from "./gitUtils";
 import { ContinuityResult, matchContinuity, PreviousLocationInfo } from "./registerRepo";
 
@@ -28,6 +28,71 @@ export function parseGitmodulesPaths(gitmodulesAbsPath: string): Set<string> {
 		console.warn("not-submodules: failed to parse .gitmodules, falling back to file-vs-directory classification only", e);
 	}
 	return paths;
+}
+
+interface RawGitmodulesEntry {
+	path: string;
+	url: string;
+}
+
+/**
+ * Parses `.gitmodules`' `[submodule "name"]` sections into path/url pairs,
+ * keeping each section's `path` and `url` correlated (unlike
+ * `parseGitmodulesPaths`, which only needs the paths). Never throws - a
+ * missing or malformed file yields an empty list.
+ */
+function parseGitmodulesEntries(gitmodulesAbsPath: string): RawGitmodulesEntry[] {
+	let content: string;
+	try {
+		content = fs.readFileSync(gitmodulesAbsPath, "utf8");
+	} catch {
+		return [];
+	}
+
+	const entries: RawGitmodulesEntry[] = [];
+	let current: Partial<RawGitmodulesEntry> | null = null;
+	try {
+		for (const line of content.split(/\r?\n/)) {
+			if (/^\s*\[submodule\b/.test(line)) {
+				if (current?.path) entries.push({ path: current.path, url: current.url ?? "" });
+				current = {};
+				continue;
+			}
+			if (!current) continue;
+			const pathMatch = line.match(/^\s*path\s*=\s*(.+?)\s*$/);
+			if (pathMatch) {
+				current.path = toVaultSlashes(pathMatch[1]).replace(/\/+$/, "");
+				continue;
+			}
+			const urlMatch = line.match(/^\s*url\s*=\s*(.+?)\s*$/);
+			if (urlMatch) current.url = urlMatch[1];
+		}
+		if (current?.path) entries.push({ path: current.path, url: current.url ?? "" });
+	} catch (e) {
+		console.warn("not-submodules: failed to parse .gitmodules for the submodules section", e);
+		return [];
+	}
+	return entries;
+}
+
+/**
+ * The read-only Submodules section's data source (PR-5) - driven entirely by
+ * `.gitmodules`, not by what the filesystem walk happens to find, so a
+ * deinitialized or never-initialized submodule (no working tree on disk)
+ * still shows up, correctly flagged rather than silently omitted.
+ */
+export function scanSubmodules(rootAbsPath: string): SubmoduleEntry[] {
+	const declared = parseGitmodulesEntries(path.join(rootAbsPath, ".gitmodules"));
+	return declared.map((d) => {
+		const gitEntryAbsPath = path.join(rootAbsPath, ...d.path.split("/"), ".git");
+		let initialized = false;
+		try {
+			initialized = fs.existsSync(gitEntryAbsPath);
+		} catch {
+			initialized = false;
+		}
+		return { vaultPath: d.path, url: d.url, initialized };
+	});
 }
 
 /**
@@ -230,7 +295,7 @@ export async function buildRegistryFromScan(
 	rootAbsPath: string,
 	previousRegistry: RepoEntry[],
 	ignoredNames?: Set<string>
-): Promise<{ entries: RepoEntry[]; warnings: string[] }> {
+): Promise<{ entries: RepoEntry[]; warnings: string[]; submodules: SubmoduleEntry[] }> {
 	const { locations: found, warnings } = walkForGitEntries(rootAbsPath, ignoredNames);
 	const rawFound = await attachOriginUrls(found, rootAbsPath);
 
@@ -248,5 +313,5 @@ export async function buildRegistryFromScan(
 		})),
 	];
 
-	return { entries: groupLocationsByOrigin(combined), warnings };
+	return { entries: groupLocationsByOrigin(combined), warnings, submodules: scanSubmodules(rootAbsPath) };
 }

@@ -162,8 +162,8 @@ export class NotSubmodulesSettingTab extends PluginSettingTab {
 				.onClick(async () => {
 					btn.setDisabled(true).setButtonText("Scanning...");
 					try {
-						const { entries, warnings } = await scanAndBuildRegistry(this.app, this.plugin.registry);
-						await this.plugin.saveRegistry(entries);
+						const { entries, warnings, submodules } = await scanAndBuildRegistry(this.app, this.plugin.registry);
+						await this.plugin.saveScanResult(entries, submodules);
 						for (const warning of warnings) new Notice(warning);
 						const count = entries.reduce((sum, e) => sum + e.locations.length, 0);
 						new Notice(
@@ -182,6 +182,7 @@ export class NotSubmodulesSettingTab extends PluginSettingTab {
 				text: 'No repos scanned yet. Click "Refresh" above to scan the vault.',
 				cls: "setting-item-description",
 			});
+			this.renderSubmodulesSection(containerEl);
 			return;
 		}
 
@@ -190,6 +191,26 @@ export class NotSubmodulesSettingTab extends PluginSettingTab {
 
 		for (const entry of this.plugin.registry) {
 			await this.renderRepoEntry(containerEl, entry, basePath);
+		}
+
+		this.renderSubmodulesSection(containerEl);
+	}
+
+	/**
+	 * Read-only and purely informational (PR-5) - driven entirely by
+	 * .gitmodules, refreshed by the same Refresh click as the main
+	 * registry. No Clone/Push/Pull/New/Delete/Remove/branch dropdown:
+	 * nothing here can be anything other than an already-declared real
+	 * git submodule.
+	 */
+	private renderSubmodulesSection(containerEl: HTMLElement): void {
+		if (this.plugin.submodules.length === 0) return;
+
+		new Setting(containerEl).setName("Submodules").setHeading();
+		for (const sub of this.plugin.submodules) {
+			new Setting(containerEl)
+				.setName(sub.vaultPath)
+				.setDesc(`${sub.url}${sub.initialized ? "" : " · not initialized on disk"}`);
 		}
 	}
 

@@ -1,5 +1,5 @@
 import { App, FileSystemAdapter } from "obsidian";
-import { RepoEntry } from "./types";
+import { RepoEntry, SubmoduleEntry } from "./types";
 import { ALWAYS_SKIPPED_NAMES, buildRegistryFromScan } from "./scan";
 
 export function getBasePath(app: App): string | null {
@@ -17,10 +17,10 @@ export function defaultIgnoredNames(app: App): Set<string> {
 export async function scanAndBuildRegistry(
 	app: App,
 	previousRegistry: RepoEntry[]
-): Promise<{ entries: RepoEntry[]; warnings: string[] }> {
+): Promise<{ entries: RepoEntry[]; warnings: string[]; submodules: SubmoduleEntry[] }> {
 	const basePath = getBasePath(app);
 	if (!basePath) {
-		return { entries: previousRegistry, warnings: ["Could not resolve the vault's location on disk."] };
+		return { entries: previousRegistry, warnings: ["Could not resolve the vault's location on disk."], submodules: [] };
 	}
 	return buildRegistryFromScan(basePath, previousRegistry, defaultIgnoredNames(app));
 }
