@@ -1,8 +1,11 @@
 import { Notice, Plugin } from "obsidian";
+import { errorMessage } from "./errors";
 import { NotSubmodulesSettingTab } from "./settingsTab";
 import { RepoEntry, SubmoduleEntry } from "./types";
 import { getBasePath } from "./registry";
 import { checkHookStatus, installHook } from "./hookInstall";
+import { describeMigrationResult, MigrationResult, needsMigration, runMigrationAt } from "./migration";
+import { MigrationModal } from "./migrationModal";
 
 interface PluginData {
 	registry: RepoEntry[];
@@ -27,6 +30,7 @@ export default class NotSubmodulesPlugin extends Plugin {
 
 		this.addSettingTab(new NotSubmodulesSettingTab(this.app, this));
 		this.checkHookHealth();
+		this.checkMigration();
 	}
 
 	async saveScanResult(entries: RepoEntry[], submodules: SubmoduleEntry[]): Promise<void> {
@@ -43,6 +47,19 @@ export default class NotSubmodulesPlugin extends Plugin {
 	async setHookInstalled(installed: boolean): Promise<void> {
 		this.hookInstalled = installed;
 		await this.persist();
+	}
+
+	/** The one atomic "Migrate now" action, shared by the on-update popup and the settings-page banner. */
+	async migrate(): Promise<MigrationResult> {
+		const basePath = getBasePath(this.app);
+		if (!basePath) throw new Error("Couldn't resolve the vault's location on disk.");
+
+		const result = await runMigrationAt(basePath, this.registry);
+		this.registry = result.entries;
+		this.submodules = result.submodules;
+		if (result.hookOutcome !== "foreign-hook-exists") this.hookInstalled = true;
+		await this.persist();
+		return result;
 	}
 
 	private async persist(): Promise<void> {
@@ -76,5 +93,25 @@ export default class NotSubmodulesPlugin extends Plugin {
 			};
 		});
 		const notice = new Notice(fragment, 0);
+	}
+
+	/**
+	 * Shown once per load (onload only ever runs once per session) when the
+	 * vault still shows the one reliable sign of a pre-rebuild install - the
+	 * old static .gitignore line. Dismissing it leaves the settings-page
+	 * banner as the persistent fallback; both drive the same `migrate()`.
+	 */
+	private checkMigration(): void {
+		const basePath = getBasePath(this.app);
+		if (!basePath || !needsMigration(basePath)) return;
+
+		new MigrationModal(this.app, async () => {
+			try {
+				const result = await this.migrate();
+				new Notice(describeMigrationResult(result));
+			} catch (e: unknown) {
+				new Notice(`Migration failed: ${errorMessage(e)}`);
+			}
+		}).open();
 	}
 }

@@ -2,6 +2,7 @@ import { execFile as execFileCb } from "child_process";
 import { promisify } from "util";
 import * as fs from "fs";
 import * as path from "path";
+import { GITIGNORE_LINE } from "./types";
 
 const execFileP = promisify(execFileCb);
 
@@ -262,4 +263,40 @@ export function sanitizeGitUrl(raw: unknown): string {
 		.trim()
 		.replace(/[,;]+$/, "")
 		.trim();
+}
+
+/**
+ * Whether `.gitignore` still has the old static wildcard line from before
+ * the filesystem-scan rebuild. This is the migration-completeness signal
+ * (PR-6) - re-derived from disk on every check rather than trusted from a
+ * stored flag, so an interrupted migration is picked back up correctly
+ * rather than silently treated as done.
+ */
+export function hasOldGitignoreLine(gitignorePath: string): boolean {
+	try {
+		return fs.readFileSync(gitignorePath, "utf8").includes(GITIGNORE_LINE);
+	} catch {
+		return false;
+	}
+}
+
+/**
+ * Removes the old static `*-git-repo/` line from `.gitignore`, leaving
+ * every other line untouched. A no-op (returns `false`) if the file is
+ * missing or the line isn't there.
+ */
+export function stripOldGitignoreLine(gitignorePath: string): boolean {
+	let content: string;
+	try {
+		content = fs.readFileSync(gitignorePath, "utf8");
+	} catch {
+		return false;
+	}
+
+	const lines = content.split(/\r?\n/);
+	const kept = lines.filter((line) => line.trim() !== GITIGNORE_LINE);
+	if (kept.length === lines.length) return false; // no exact-line match - e.g. only a comment mentions it, leave it alone
+
+	fs.writeFileSync(gitignorePath, kept.join("\n"));
+	return true;
 }
