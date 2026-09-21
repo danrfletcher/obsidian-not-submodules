@@ -1,17 +1,9 @@
-import { App, Notice, PluginSettingTab, Setting, normalizePath, setIcon } from "obsidian";
-import type { TAbstractFile } from "obsidian";
+import { App, Notice, PluginSettingTab, Setting, setIcon } from "obsidian";
 import type NotSubmodulesPlugin from "./main";
-import { GITIGNORE_LINE } from "./types";
-import { gitClone, gitInit, gitPull, gitPush, hasGitDir } from "./gitUtils";
-import {
-	buildRegistry,
-	findUnregisteredGitRepoFolders,
-	findUnregisteredGitRepoFoldersFast,
-	getBasePath,
-} from "./registry";
-import { registerRepoAtPath } from "./registerRepo";
+import { GITIGNORE_LINE, LocationKind } from "./types";
+import { gitInit, hasGitDir } from "./gitUtils";
+import { getBasePath, scanAndBuildRegistry } from "./registry";
 import { revealInFileExplorer } from "./reveal";
-import { SimplePathSuggest } from "./pathSuggest";
 import { errorMessage } from "./errors";
 import * as fs from "fs";
 import * as path from "path";
@@ -23,14 +15,18 @@ function vaultDirname(vaultPath: string): string {
 	return parts.join("/");
 }
 
+function kindLabel(kind: LocationKind): string {
+	if (kind === "worktree") return "worktree";
+	if (kind === "submodule") return "submodule";
+	return "original";
+}
+
 export class NotSubmodulesSettingTab extends PluginSettingTab {
 	plugin: NotSubmodulesPlugin;
-	private refreshTimer: number | null = null;
 
 	constructor(app: App, plugin: NotSubmodulesPlugin) {
 		super(app, plugin);
 		this.plugin = plugin;
-		this.registerAutoRefresh();
 	}
 
 	display(): void {
@@ -40,33 +36,6 @@ export class NotSubmodulesSettingTab extends PluginSettingTab {
 		this.renderGitInitSetting(containerEl);
 		this.renderGitignoreSetting(containerEl);
 		this.renderRepoList(containerEl);
-		this.renderRegisterNew(containerEl);
-	}
-
-	/**
-	 * Keeps the repo list (and the "Register a repo" candidate list) in sync
-	 * with changes that happen outside this tab's own buttons - registering
-	 * via the command palette/ribbon icon while Settings is open, or
-	 * hand-editing a folder note's `git_repos` frontmatter (adding, removing,
-	 * deleting, or renaming it) - without requiring a reload of Obsidian.
-	 *
-	 * Registered once (tied to the plugin's lifetime via `registerEvent`, so
-	 * it's cleaned up automatically on unload) rather than from `display()`,
-	 * which is called repeatedly and would otherwise leak listeners.
-	 */
-	private registerAutoRefresh(): void {
-		const scheduleRefresh = (_file: TAbstractFile) => {
-			if (this.refreshTimer !== null) window.clearTimeout(this.refreshTimer);
-			this.refreshTimer = window.setTimeout(() => {
-				this.refreshTimer = null;
-				if (this.containerEl.isShown()) this.display();
-			}, 200);
-		};
-		this.plugin.registerEvent(this.app.metadataCache.on("changed", scheduleRefresh));
-		this.plugin.registerEvent(this.app.metadataCache.on("deleted", scheduleRefresh));
-		this.plugin.registerEvent(this.app.vault.on("create", scheduleRefresh));
-		this.plugin.registerEvent(this.app.vault.on("delete", scheduleRefresh));
-		this.plugin.registerEvent(this.app.vault.on("rename", scheduleRefresh));
 	}
 
 	private renderGitInitSetting(containerEl: HTMLElement): void {
@@ -146,210 +115,70 @@ export class NotSubmodulesSettingTab extends PluginSettingTab {
 	}
 
 	/**
-	 * PR-1 keeps rendering one row per entry off its first (only, for now)
-	 * location - the new model's locations array and multi-location UI
-	 * (Originals/Worktrees sections, per-location actions) land in PR-4.
+	 * A manual filesystem scan, never run automatically. This is a
+	 * deliberately unstyled listing - the Originals/Worktrees sections and
+	 * per-location actions (Clone/Push/Pull/New/Delete/Remove) are PR-4's
+	 * job; this PR only needs the scan result to be visible and correct.
 	 */
 	private renderRepoList(containerEl: HTMLElement): void {
 		new Setting(containerEl).setName("Nested git repos").setHeading();
 
-		const registry = buildRegistry(this.app);
-		const basePath = getBasePath(this.app);
-		const withLocation = registry.filter((r) => r.locations.length > 0);
-		const missing = withLocation.filter((r) => !r.locations[0].isCloned);
-		const cloned = withLocation.filter((r) => r.locations[0].isCloned);
+		const refreshSetting = new Setting(containerEl)
+			.setName("Refresh")
+			.setDesc("Scans the vault's filesystem for nested git repos and rebuilds this list. Not run automatically.");
+		refreshSetting.addButton((btn) =>
+			btn
+				.setButtonText("Refresh")
+				.setCta()
+				.onClick(async () => {
+					btn.setDisabled(true).setButtonText("Scanning...");
+					try {
+						const { entries, warnings } = await scanAndBuildRegistry(this.app, this.plugin.registry);
+						await this.plugin.saveRegistry(entries);
+						for (const warning of warnings) new Notice(warning);
+						const count = entries.reduce((sum, e) => sum + e.locations.length, 0);
+						new Notice(`Found ${count} repo location${count === 1 ? "" : "s"} across ${entries.length} repo${entries.length === 1 ? "" : "s"}.`);
+					} catch (e: unknown) {
+						new Notice(`Refresh failed: ${errorMessage(e)}`);
+					} finally {
+						this.display();
+					}
+				})
+		);
 
-		if (registry.length === 0) {
+		if (this.plugin.registry.length === 0) {
 			containerEl.createEl("p", {
-				text: 'No repos registered yet. Use "Register a repo" below to add one.',
+				text: 'No repos scanned yet. Click "Refresh" above to scan the vault.',
 				cls: "setting-item-description",
 			});
 			return;
 		}
 
-		const bulk = new Setting(containerEl).setName("Bulk actions");
-
-		if (missing.length > 0) {
-			bulk.addButton((btn) =>
-				btn.setButtonText(`Clone all missing (${missing.length})`).onClick(async () => {
-					btn.setDisabled(true).setButtonText("Cloning...");
-					for (const entry of missing) {
-						if (!basePath) continue;
-						try {
-							await gitClone(entry.originUrl, `${basePath}/${entry.locations[0].vaultPath}`);
-						} catch (e: unknown) {
-							new Notice(`Failed to clone ${entry.repoName}: ${errorMessage(e)}`);
-						}
-					}
-					new Notice("Finished cloning missing repos.");
-					this.display();
-				})
-			);
-		}
-		if (cloned.length > 0) {
-			bulk.addButton((btn) =>
-				btn.setButtonText(`Pull all (${cloned.length})`).onClick(async () => {
-					btn.setDisabled(true).setButtonText("Pulling...");
-					for (const entry of cloned) {
-						if (!basePath) continue;
-						try {
-							await gitPull(`${basePath}/${entry.locations[0].vaultPath}`);
-						} catch (e: unknown) {
-							new Notice(`Failed to pull ${entry.repoName}: ${errorMessage(e)}`);
-						}
-					}
-					new Notice("Finished pulling all repos.");
-					this.display();
-				})
-			);
-			bulk.addButton((btn) =>
-				btn.setButtonText(`Push all (${cloned.length})`).onClick(async () => {
-					btn.setDisabled(true).setButtonText("Pushing...");
-					for (const entry of cloned) {
-						if (!basePath) continue;
-						try {
-							await gitPush(`${basePath}/${entry.locations[0].vaultPath}`);
-						} catch (e: unknown) {
-							new Notice(`Failed to push ${entry.repoName}: ${errorMessage(e)}`);
-						}
-					}
-					new Notice("Finished pushing all repos.");
-					this.display();
-				})
-			);
-		}
-
-		for (const entry of withLocation) {
-			const location = entry.locations[0];
-			const parentFolderPath = vaultDirname(location.vaultPath);
+		for (const entry of this.plugin.registry) {
+			const originals = entry.locations.filter((l) => l.kind !== "worktree");
+			const worktrees = entry.locations.filter((l) => l.kind === "worktree");
 
 			const setting = new Setting(containerEl)
 				.setName(entry.repoName)
-				.setDesc(`${entry.originUrl} \u00b7 in ${parentFolderPath || "vault root"}`);
+				.setDesc(
+					entry.originUrl
+						? `${entry.originUrl} · ${originals.length} original${originals.length === 1 ? "" : "s"}, ${worktrees.length} worktree${worktrees.length === 1 ? "" : "s"}`
+						: "No resolvable origin remote yet - not trackable across locations until it has one."
+				);
 
-			setting.nameEl.addClass("not-submodules-repo-name");
-			setting.nameEl.setAttr(
-				"title",
-				location.isCloned
-					? "Click to reveal in file navigator"
-					: "Not cloned locally yet - click to reveal its parent folder"
-			);
-			setting.nameEl.setCssStyles({ cursor: "pointer" });
-			setting.nameEl.addEventListener("click", () => {
-				const revealed = location.isCloned
-					? revealInFileExplorer(this.app, location.vaultPath)
-					: revealInFileExplorer(this.app, parentFolderPath);
-				if (!revealed) {
-					new Notice("Couldn't reveal it in the file navigator.");
-				}
-			});
-
-			if (location.isCloned) {
-				setting.addButton((btn) =>
-					btn.setButtonText("Pull").onClick(async () => {
-						btn.setDisabled(true).setButtonText("Pulling...");
-						if (!basePath) return;
-						try {
-							await gitPull(`${basePath}/${location.vaultPath}`);
-							new Notice(`Pulled ${entry.repoName}.`);
-						} catch (e: unknown) {
-							new Notice(`Pull failed: ${errorMessage(e)}`);
-						} finally {
-							this.display();
-						}
-					})
-				);
-				setting.addButton((btn) =>
-					btn.setButtonText("Push").onClick(async () => {
-						btn.setDisabled(true).setButtonText("Pushing...");
-						if (!basePath) return;
-						try {
-							await gitPush(`${basePath}/${location.vaultPath}`);
-							new Notice(`Pushed ${entry.repoName}.`);
-						} catch (e: unknown) {
-							new Notice(`Push failed: ${errorMessage(e)}`);
-						} finally {
-							this.display();
-						}
-					})
-				);
-			} else {
-				setting.addButton((btn) =>
-					btn
-						.setButtonText("Clone")
-						.setCta()
-						.onClick(async () => {
-							btn.setDisabled(true).setButtonText("Cloning...");
-							if (!basePath) return;
-							try {
-								await gitClone(entry.originUrl, `${basePath}/${location.vaultPath}`);
-								new Notice(`Cloned ${entry.repoName}.`);
-							} catch (e: unknown) {
-								new Notice(`Clone failed: ${errorMessage(e)}`);
-							} finally {
-								this.display();
-							}
-						})
-				);
+			const list = setting.controlEl.createEl("ul", { cls: "not-submodules-location-list" });
+			for (const loc of entry.locations) {
+				const item = list.createEl("li", {
+					text: `${loc.vaultPath} (${kindLabel(loc.kind)}${loc.isCloned ? "" : ", missing"})`,
+				});
+				item.setCssStyles({ cursor: "pointer" });
+				item.addEventListener("click", () => {
+					const target = loc.isCloned ? loc.vaultPath : vaultDirname(loc.vaultPath);
+					if (!revealInFileExplorer(this.app, target)) {
+						new Notice("Couldn't reveal it in the file navigator.");
+					}
+				});
 			}
 		}
-	}
-
-	private renderRegisterNew(containerEl: HTMLElement): void {
-		new Setting(containerEl).setName("Register a repo").setHeading();
-		containerEl.createEl("p", {
-			cls: "setting-item-description",
-			text:
-				"Point this at an existing -git-repo folder (already git-initialised, with an origin remote) " +
-				"to declare it in the nearest folder note's frontmatter.",
-		});
-
-		let candidates = findUnregisteredGitRepoFoldersFast(this.app);
-		findUnregisteredGitRepoFolders(this.app)
-			.then((accurate) => {
-				candidates = accurate;
-			})
-			.catch(() => {
-				// Ignore - the fast/synchronous candidate list above still works.
-			});
-
-		let chosenPath = "";
-
-		const setting = new Setting(containerEl).setName("Folder path");
-		setting.addText((text) => {
-			text.setPlaceholder("path/to/my-repo-git-repo");
-			new SimplePathSuggest(
-				this.app,
-				text.inputEl,
-				() => candidates,
-				(value) => {
-					chosenPath = value;
-				}
-			);
-			text.onChange((value) => {
-				chosenPath = value;
-			});
-		});
-		setting.addButton((btn) =>
-			btn
-				.setButtonText("Register")
-				.setCta()
-				.onClick(async () => {
-					const relPath = normalizePath(chosenPath.trim());
-					if (!relPath) {
-						new Notice("Enter a folder path first.");
-						return;
-					}
-					btn.setDisabled(true).setButtonText("Registering...");
-					try {
-						const outcome = await registerRepoAtPath(this.app, relPath);
-						new Notice(outcome.message);
-						this.display();
-					} catch (e: unknown) {
-						new Notice(`Couldn't register: ${errorMessage(e)}`);
-						btn.setDisabled(false).setButtonText("Register");
-					}
-				})
-		);
 	}
 }

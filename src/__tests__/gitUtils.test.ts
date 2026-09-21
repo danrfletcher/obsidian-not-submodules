@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert";
-import { normalizeOriginUrl } from "../gitUtils.ts";
+import { normalizeOriginUrl } from "../gitUtils";
 
 test("normalizeOriginUrl: SSH and HTTPS forms of the same repo are equal", () => {
 	assert.strictEqual(
