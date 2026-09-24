@@ -1,7 +1,7 @@
 {
 	"name": "not-submodules",
-	"version": "1.0.3",
-	"description": "Replace git submodules with plain nested git repos, ignored via .gitignore and tracked via folder-note frontmatter.",
+	"version": "1.1.0",
+	"description": "Replace git submodules with plain nested git repos, discovered by scanning your vault and kept out of its history by a self-maintaining git hook.",
 	"main": "main.js",
 	"scripts": {
 		"dev": "node esbuild.config.mjs",
