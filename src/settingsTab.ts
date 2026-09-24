@@ -23,6 +23,7 @@ import { getBasePath, scanAndBuildRegistry } from "./registry";
 import { checkHookStatus, installHook } from "./hookInstall";
 import { computeLocationUiState, deleteLocation, removeLocationFromRegistry, validateNewClonePath } from "./locationActions";
 import { describeMigrationResult, needsMigration } from "./migration";
+import { ConfirmModal } from "./confirmModal";
 import { revealInFileExplorer } from "./reveal";
 import { errorMessage } from "./errors";
 import * as path from "path";
@@ -454,7 +455,7 @@ export class NotSubmodulesSettingTab extends PluginSettingTab {
 				setting.addButton((btn) =>
 					btn
 						.setButtonText("Repair")
-						.setWarning()
+						.setDestructive()
 						.onClick(() =>
 							this.runLocationAction(loc.vaultPath, btn, "Repairing...", async () => {
 								await gitWorktreeRepair(mainRepoAbsPath, absPath);
@@ -489,11 +490,16 @@ export class NotSubmodulesSettingTab extends PluginSettingTab {
 			setting.addButton((btn) =>
 				btn
 					.setButtonText("Delete")
-					.setWarning()
+					.setDestructive()
 					.setDisabled(!ui.deleteEnabled || busy)
-					.onClick(() => {
-						if ((live.isDirty || live.hasStash) && !confirm(`"${loc.vaultPath}" has uncommitted changes${live.hasStash ? " and a stash" : ""} that will be permanently lost. Delete anyway?`)) {
-							return;
+					.onClick(async () => {
+						if (live.isDirty || live.hasStash) {
+							const confirmed = await new ConfirmModal(
+								this.app,
+								`"${loc.vaultPath}" has uncommitted changes${live.hasStash ? " and a stash" : ""} that will be permanently lost. Delete anyway?`,
+								"Delete"
+							).ask();
+							if (!confirmed) return;
 						}
 						return this.runLocationAction(loc.vaultPath, btn, "Deleting...", async () => {
 							await deleteLocation(loc.kind, absPath, mainRepoAbsPath);
@@ -522,7 +528,7 @@ export class NotSubmodulesSettingTab extends PluginSettingTab {
 			setting.addButton((btn) =>
 				btn
 					.setButtonText("Remove")
-					.setWarning()
+					.setDestructive()
 					.setDisabled(!ui.removeEnabled || busy)
 					.onClick(async () => {
 						const updated = removeLocationFromRegistry(this.plugin.registry, entry.normalizedOrigin, loc.vaultPath);
