@@ -1,12 +1,11 @@
 import { App, Notice, PluginSettingTab, Setting, setIcon } from "obsidian";
 import type NotSubmodulesPlugin from "./main";
-import { GITIGNORE_LINE, LocationKind } from "./types";
+import { LocationKind } from "./types";
 import { gitInit, hasGitDir } from "./gitUtils";
 import { getBasePath, scanAndBuildRegistry } from "./registry";
+import { checkHookStatus, installHook } from "./hookInstall";
 import { revealInFileExplorer } from "./reveal";
 import { errorMessage } from "./errors";
-import * as fs from "fs";
-import * as path from "path";
 
 /** Vault-relative parent path of a vault-relative path ("" for the vault root). */
 function vaultDirname(vaultPath: string): string {
@@ -34,7 +33,7 @@ export class NotSubmodulesSettingTab extends PluginSettingTab {
 		containerEl.empty();
 
 		this.renderGitInitSetting(containerEl);
-		this.renderGitignoreSetting(containerEl);
+		this.renderHookSetting(containerEl);
 		this.renderRepoList(containerEl);
 	}
 
@@ -74,44 +73,48 @@ export class NotSubmodulesSettingTab extends PluginSettingTab {
 		}
 	}
 
-	private renderGitignoreSetting(containerEl: HTMLElement): void {
+	private renderHookSetting(containerEl: HTMLElement): void {
 		const basePath = getBasePath(this.app);
-		const gitignorePath = basePath ? path.join(basePath, ".gitignore") : null;
-		const alreadySetUp =
-			!!gitignorePath &&
-			fs.existsSync(gitignorePath) &&
-			fs.readFileSync(gitignorePath, "utf8").includes(GITIGNORE_LINE);
+		const status = basePath ? checkHookStatus(basePath) : "missing";
 
 		const setting = new Setting(containerEl)
-			.setName("Ignore nested repos")
-			.setDesc(`Adds "${GITIGNORE_LINE}" to .gitignore so nested repos aren't tracked as part of the vault repo.`);
+			.setName("Install git hook")
+			.setDesc(
+				"Installs a pre-commit hook that keeps .gitignore's nested-repo rules correct automatically on every commit " +
+					"- no manual step needed."
+			);
 
-		if (alreadySetUp) {
-			const status = setting.controlEl.createSpan({ cls: "not-submodules-status" });
-			setIcon(status.createSpan(), "check");
-			status.createSpan({ text: " .gitignore is set up" });
-		} else {
-			setting.addButton((btn) =>
-				btn
-					.setButtonText("Add to .gitignore")
-					.setCta()
-					.onClick(async () => {
-						if (!gitignorePath) {
-							new Notice("Couldn't resolve the vault's location on disk.");
-							return;
-						}
-						try {
-							const existing = fs.existsSync(gitignorePath) ? fs.readFileSync(gitignorePath, "utf8") : "";
-							const sep = existing.length && !existing.endsWith("\n") ? "\n" : "";
-							fs.writeFileSync(gitignorePath, `${existing}${sep}${GITIGNORE_LINE}\n`);
-							new Notice(".gitignore updated.");
-							this.display();
-						} catch (e: unknown) {
-							new Notice(`Failed to update .gitignore: ${errorMessage(e)}`);
-						}
-					})
+		if (status === "installed") {
+			const s = setting.controlEl.createSpan({ cls: "not-submodules-status" });
+			setIcon(s.createSpan(), "check");
+			s.createSpan({ text: " Git hook installed" });
+			return;
+		}
+
+		if (status === "foreign") {
+			setting.setDesc(
+				setting.descEl.textContent +
+					" A pre-commit hook this plugin didn't install already exists - installing is refused until you resolve it."
 			);
 		}
+
+		setting.addButton((btn) =>
+			btn
+				.setButtonText("Install git hook")
+				.setCta()
+				.onClick(async () => {
+					if (!basePath) {
+						new Notice("Couldn't resolve the vault's location on disk.");
+						return;
+					}
+					const outcome = installHook(basePath);
+					new Notice(outcome.message);
+					if (outcome.status !== "foreign-hook-exists") {
+						await this.plugin.setHookInstalled(true);
+					}
+					this.display();
+				})
+		);
 	}
 
 	/**
