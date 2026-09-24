@@ -1,4 +1,3 @@
-export const GIT_REPO_SUFFIX = "-git-repo";
 export const GITIGNORE_LINE = "*-git-repo/";
 
 /** How a nested `.git` entry was classified during a filesystem scan. */
