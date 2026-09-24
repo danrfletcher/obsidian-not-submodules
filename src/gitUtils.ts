@@ -88,6 +88,50 @@ export function repoNameFromUrl(url: string): string {
 }
 
 /**
+ * Normalizes a git origin URL so that SSH and HTTPS forms of the same
+ * host+path compare equal (Q30) - used both for grouping locations into one
+ * repo entry and for continuity matching across an origin spelling change.
+ *
+ * Handles: scheme-form URLs (https://, ssh://, git://, ...), SCP-like SSH
+ * syntax (git@host:path), embedded credentials (user[:pass]@host), a
+ * trailing ".git", and host case. Never throws - empty or unparseable input
+ * produces a stable (possibly empty) string the caller can treat as falsy.
+ */
+export function normalizeOriginUrl(url: string): string {
+	if (typeof url !== "string") return "";
+	const trimmed = url.trim();
+	if (!trimmed) return "";
+
+	const schemeMatch = trimmed.match(/^[a-zA-Z][a-zA-Z0-9+.-]*:\/\/(.*)$/);
+	let rest: string;
+	if (schemeMatch) {
+		rest = schemeMatch[1];
+	} else {
+		// SCP-like syntax: [user@]host:path (e.g. git@github.com:user/repo.git).
+		const scpMatch = trimmed.match(/^(?:[^@/\s]+@)?([^:/\s]+):(.+)$/);
+		rest = scpMatch ? `${scpMatch[1]}/${scpMatch[2]}` : trimmed;
+	}
+
+	// Strip embedded credentials (user or user:pass before an "@").
+	rest = rest.replace(/^[^@/\s]+@/, "");
+
+	const slashIdx = rest.indexOf("/");
+	const rawHost = slashIdx === -1 ? rest : rest.slice(0, slashIdx);
+	const rawPath = slashIdx === -1 ? "" : rest.slice(slashIdx + 1);
+
+	const host = rawHost.trim().toLowerCase();
+	const pathPart = rawPath
+		.trim()
+		.replace(/^\/+/, "")
+		.replace(/\/+$/, "")
+		.replace(/\.git$/i, "");
+
+	if (!host && !pathPart) return "";
+	if (host && pathPart) return `${host}/${pathPart}`;
+	return host || pathPart;
+}
+
+/**
  * Cleans up a git URL as typed/pasted by hand into frontmatter: trims
  * whitespace and strips stray trailing commas/semicolons - an easy typo
  * when hand-editing a YAML list (e.g. carrying over comma habits from
