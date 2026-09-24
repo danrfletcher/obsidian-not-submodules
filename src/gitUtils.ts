@@ -1,10 +1,7 @@
-import { execFile as execFileCb } from "child_process";
-import { promisify } from "util";
+import { execFile as execFileCb, ExecFileException } from "child_process";
 import * as fs from "fs";
 import * as path from "path";
 import { GITIGNORE_LINE } from "./types";
-
-const execFileP = promisify(execFileCb);
 
 export interface GitResult {
 	stdout: string;
@@ -12,36 +9,47 @@ export interface GitResult {
 }
 
 interface ExecFileError extends Error {
-	stderr?: unknown;
+	stderr?: string;
 }
 
 function toExecFileError(e: unknown): ExecFileError {
-	return e instanceof Error ? (e as ExecFileError) : new Error(String(e));
+	return e instanceof Error ? e : new Error(String(e));
 }
 
-/** Stringifies a Buffer/string/anything without referencing the Buffer type directly. */
-function stringifyMaybeBuffer(v: unknown): string {
-	if (typeof v === "string") return v;
-	if (v == null) return "";
-	if (typeof v === "object" && "toString" in v && typeof (v as { toString: unknown }).toString === "function") {
-		return String(v);
-	}
-	return "";
+/**
+ * A directly-typed `execFile`, rather than `promisify(execFile)` - `execFile`
+ * has enough overloads (Buffer output, string output, with/without options)
+ * that `promisify`'s inference collapses to a poorly-typed result. Passing
+ * `encoding: "utf8"` explicitly here pins Node's own typings to the
+ * string-output overload, so stdout/stderr are plain `string` throughout,
+ * not `string | Buffer`.
+ */
+function execFileAsync(file: string, args: string[], options: { cwd: string; maxBuffer: number; timeout: number }): Promise<GitResult> {
+	return new Promise((resolve, reject) => {
+		execFileCb(file, args, { ...options, encoding: "utf8" }, (error: ExecFileException | null, stdout: string, stderr: string) => {
+			if (error) {
+				const err: ExecFileError = error;
+				err.stderr = stderr;
+				reject(err);
+				return;
+			}
+			resolve({ stdout, stderr });
+		});
+	});
 }
 
 /** Run a git command with argv-style args (no shell involved, so no quoting issues). */
 export async function runGit(args: string[], cwd: string, timeoutMs = 120000): Promise<GitResult> {
 	try {
-		const { stdout, stderr } = await execFileP("git", args, {
+		return await execFileAsync("git", args, {
 			cwd,
 			maxBuffer: 20 * 1024 * 1024,
 			timeout: timeoutMs,
 		});
-		return { stdout: stdout?.toString() ?? "", stderr: stderr?.toString() ?? "" };
 	} catch (e: unknown) {
 		const err = toExecFileError(e);
-		const stderrText = stringifyMaybeBuffer(err.stderr);
-		const msg = (stderrText && stderrText.trim()) || err.message || String(e);
+		const stderrText = err.stderr?.trim() ?? "";
+		const msg = stderrText || err.message || String(e);
 		throw new Error(msg.trim());
 	}
 }
