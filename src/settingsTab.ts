@@ -22,6 +22,7 @@ import {
 import { getBasePath, scanAndBuildRegistry } from "./registry";
 import { checkHookStatus, installHook } from "./hookInstall";
 import { computeLocationUiState, deleteLocation, removeLocationFromRegistry, validateNewClonePath } from "./locationActions";
+import { describeMigrationResult, needsMigration } from "./migration";
 import { revealInFileExplorer } from "./reveal";
 import { errorMessage } from "./errors";
 import * as path from "path";
@@ -64,9 +65,43 @@ export class NotSubmodulesSettingTab extends PluginSettingTab {
 		const { containerEl } = this;
 		containerEl.empty();
 
+		this.renderMigrationBanner(containerEl);
 		this.renderGitInitSetting(containerEl);
 		this.renderHookSetting(containerEl);
 		void this.renderRepoList(containerEl);
+	}
+
+	/**
+	 * The persistent fallback for anyone who dismissed the on-update popup
+	 * (`main.ts`'s `checkMigration`) without migrating - same disk-derived
+	 * `needsMigration` check, so it disappears the moment migration actually
+	 * completes, from either this banner's own button or the popup.
+	 */
+	private renderMigrationBanner(containerEl: HTMLElement): void {
+		const basePath = getBasePath(this.app);
+		if (!basePath || !needsMigration(basePath)) return;
+
+		new Setting(containerEl)
+			.setName("Plugin updated - migrate now to restore submodules")
+			.setDesc(
+				"Rescans your vault, installs the self-maintaining git hook, and removes the old static ignore rule - all in one step."
+			)
+			.addButton((btn) =>
+				btn
+					.setButtonText("Migrate now")
+					.setCta()
+					.onClick(async () => {
+						btn.setDisabled(true).setButtonText("Migrating...");
+						try {
+							const result = await this.plugin.migrate();
+							new Notice(describeMigrationResult(result));
+						} catch (e: unknown) {
+							new Notice(`Migration failed: ${errorMessage(e)}`);
+						} finally {
+							this.display();
+						}
+					})
+			);
 	}
 
 	private renderGitInitSetting(containerEl: HTMLElement): void {
