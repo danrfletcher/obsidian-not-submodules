@@ -1,9 +1,9 @@
 {
 	"id": "not-submodules",
 	"name": "Not Submodules",
-	"version": "1.0.3",
+	"version": "1.1.0",
 	"minAppVersion": "1.7.2",
-	"description": "Replace git submodules with plain nested git repos, ignored via .gitignore and tracked via folder-note frontmatter.",
+	"description": "Replace git submodules with plain nested git repos, discovered by scanning your vault and kept out of its history by a self-maintaining git hook.",
 	"author": "Dan Fletcher",
 	"isDesktopOnly": true
 }
