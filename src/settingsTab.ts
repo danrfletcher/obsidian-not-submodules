@@ -455,7 +455,7 @@ export class NotSubmodulesSettingTab extends PluginSettingTab {
 				setting.addButton((btn) =>
 					btn
 						.setButtonText("Repair")
-						.setDestructive()
+						.setWarning()
 						.onClick(() =>
 							this.runLocationAction(loc.vaultPath, btn, "Repairing...", async () => {
 								await gitWorktreeRepair(mainRepoAbsPath, absPath);
@@ -490,7 +490,7 @@ export class NotSubmodulesSettingTab extends PluginSettingTab {
 			setting.addButton((btn) =>
 				btn
 					.setButtonText("Delete")
-					.setDestructive()
+					.setWarning()
 					.setDisabled(!ui.deleteEnabled || busy)
 					.onClick(async () => {
 						if (live.isDirty || live.hasStash) {
@@ -528,7 +528,7 @@ export class NotSubmodulesSettingTab extends PluginSettingTab {
 			setting.addButton((btn) =>
 				btn
 					.setButtonText("Remove")
-					.setDestructive()
+					.setWarning()
 					.setDisabled(!ui.removeEnabled || busy)
 					.onClick(async () => {
 						const updated = removeLocationFromRegistry(this.plugin.registry, entry.normalizedOrigin, loc.vaultPath);
