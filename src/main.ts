@@ -1,6 +1,6 @@
 import { Notice, Plugin } from "obsidian";
 import { NotSubmodulesSettingTab } from "./settingsTab";
-import { RepoEntry } from "./types";
+import { RepoEntry, SubmoduleEntry } from "./types";
 import { getBasePath } from "./registry";
 import { checkHookStatus, installHook } from "./hookInstall";
 
@@ -8,6 +8,8 @@ interface PluginData {
 	registry: RepoEntry[];
 	/** Whether this plugin has ever installed the hook in this vault (survives it going missing on a fresh clone). */
 	hookInstalled: boolean;
+	/** Last known submodules (PR-5) - read-only, refreshed the same way as the main registry. */
+	submodules: SubmoduleEntry[];
 }
 
 export default class NotSubmodulesPlugin extends Plugin {
@@ -15,14 +17,22 @@ export default class NotSubmodulesPlugin extends Plugin {
 	registry: RepoEntry[] = [];
 	/** Mirrors `PluginData.hookInstalled` - whether we've ever successfully installed the hook in this vault. */
 	hookInstalled = false;
+	submodules: SubmoduleEntry[] = [];
 
 	async onload() {
 		const data = (await this.loadData()) as PluginData | null;
 		this.registry = data?.registry ?? [];
 		this.hookInstalled = data?.hookInstalled ?? false;
+		this.submodules = data?.submodules ?? [];
 
 		this.addSettingTab(new NotSubmodulesSettingTab(this.app, this));
 		this.checkHookHealth();
+	}
+
+	async saveScanResult(entries: RepoEntry[], submodules: SubmoduleEntry[]): Promise<void> {
+		this.registry = entries;
+		this.submodules = submodules;
+		await this.persist();
 	}
 
 	async saveRegistry(entries: RepoEntry[]): Promise<void> {
@@ -36,7 +46,7 @@ export default class NotSubmodulesPlugin extends Plugin {
 	}
 
 	private async persist(): Promise<void> {
-		const data: PluginData = { registry: this.registry, hookInstalled: this.hookInstalled };
+		const data: PluginData = { registry: this.registry, hookInstalled: this.hookInstalled, submodules: this.submodules };
 		await this.saveData(data);
 	}
 
